@@ -16,6 +16,8 @@ from .proxy_manager import ProxyManager
 from ..core.config import config
 from ..core.logger import debug_logger
 
+
+
 # PoW related constants
 POW_MAX_ITERATION = 500000
 POW_CORES = [8, 16, 24, 32]
@@ -51,6 +53,7 @@ class SoraClient:
 
     CHATGPT_BASE_URL = "https://chatgpt.com"
     SENTINEL_FLOW = "sora_2_create_task"
+    USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
 
     def __init__(self, proxy_manager: ProxyManager):
         self.proxy_manager = proxy_manager
@@ -157,7 +160,8 @@ class SoraClient:
     async def _generate_sentinel_token(self, token: Optional[str] = None) -> str:
         """Generate openai-sentinel-token by calling /backend-api/sentinel/req and solving PoW"""
         req_id = str(uuid4())
-        user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+        user_agent = self.USER_AGENT 
+        #user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
         pow_token = self._get_pow_token(user_agent)
 
         proxy_url = await self.proxy_manager.get_proxy_url()
@@ -166,12 +170,13 @@ class SoraClient:
         url = f"{self.CHATGPT_BASE_URL}/backend-api/sentinel/req"
         payload = {"p": pow_token, "flow": self.SENTINEL_FLOW, "id": req_id}
         headers = {
-            "Accept": "application/json, text/plain, */*",
+            "Accept": "application/json, text/plain, */*", # 注意这里有一个小修正 _/_ -> */*
             "Content-Type": "application/json",
             "Origin": "https://sora.chatgpt.com",
             "Referer": "https://sora.chatgpt.com/",
-            "User-Agent": user_agent,
+            "User-Agent": user_agent, # 使用统一 UA
         }
+
         if token:
             headers["Authorization"] = f"Bearer {token}"
 
@@ -180,7 +185,7 @@ class SoraClient:
                 "headers": headers,
                 "json": payload,
                 "timeout": 10,
-                "impersonate": "chrome"
+                "impersonate": "chrome124" 
             }
             if proxy_url:
                 kwargs["proxy"] = proxy_url
@@ -269,7 +274,9 @@ class SoraClient:
                            json_data: Optional[Dict] = None,
                            multipart: Optional[Dict] = None,
                            add_sentinel_token: bool = False,
-                           token_id: Optional[int] = None) -> Dict[str, Any]:
+                           token_id: Optional[int] = None,
+                           # 【新增参数】允许从外部传入 Cookies (比如 cf_clearance)
+                           cookies: Optional[Dict] = None) -> Dict[str, Any]:
         """Make HTTP request with proxy support
 
         Args:
@@ -283,11 +290,16 @@ class SoraClient:
         """
         proxy_url = await self.proxy_manager.get_proxy_url(token_id)
 
+        # 【修改点 3】完全重写 Headers，伪装成 PC 浏览器，而不是 Android App
         headers = {
             "Authorization": f"Bearer {token}",
-            "User-Agent" : "Sora/1.2026.007 (Android 15; 24122RKC7C; build 2600700)"
+            "User-Agent": self.USER_AGENT, # 使用统一的 PC UA
+            "Accept": "*/*",
+            "Accept-Language": "en-US,en;q=0.9",
+            "Origin": "https://sora.chatgpt.com",
+            "Referer": "https://sora.chatgpt.com/",
         }
-
+        
         # 只在生成请求时添加 sentinel token
         if add_sentinel_token:
             headers["openai-sentinel-token"] = await self._generate_sentinel_token(token)
@@ -297,21 +309,24 @@ class SoraClient:
 
         async with AsyncSession() as session:
             url = f"{self.base_url}{endpoint}"
-
+            
             kwargs = {
                 "headers": headers,
                 "timeout": self.timeout,
-                "impersonate": "chrome"  # 自动生成 User-Agent 和浏览器指纹
+                # 【修改点 4】与 User-Agent 严格对应
+                "impersonate": "chrome124" 
             }
-
+            
             if proxy_url:
                 kwargs["proxy"] = proxy_url
-
             if json_data:
                 kwargs["json"] = json_data
-
             if multipart:
                 kwargs["multipart"] = multipart
+            
+            # 【修改点 5】注入 Cookies (如果有)
+            if cookies:
+                kwargs["cookies"] = cookies
 
             # Log request
             debug_logger.log_request(
